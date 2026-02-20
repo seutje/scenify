@@ -1,0 +1,5 @@
+{
+  "name": "Audio Storyboard Visualizer",
+  "description": "Transform MP3 files into visual storyboards with AI-generated scenes, frame prompts, and motion descriptions optimized for video generation.",
+  "requestFramePermissions": []
+}
