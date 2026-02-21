@@ -16,9 +16,16 @@ export const analyzeAudio = async (
     throw new Error("API Key is missing. Please provide it in settings or ensure the environment is configured.");
   }
   const ai = new GoogleGenAI({ apiKey: finalApiKey });
+
+  const formatDurationAsMmSs = (seconds: number): string => {
+    const totalSeconds = Math.max(0, Math.round(seconds));
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainingSeconds = totalSeconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+  };
   
-  const durationInfo = duration 
-    ? `The total duration of this audio is exactly ${duration.toFixed(2)} seconds.` 
+  const durationInfo = typeof duration === "number"
+    ? `The total duration of this audio is exactly ${formatDurationAsMmSs(duration)} (mm:ss).`
     : "";
 
   const systemInstruction = `
@@ -61,7 +68,7 @@ export const analyzeAudio = async (
   `;
 
   const prompt = storyInput 
-    ? `Based on this story: "${storyInput}", create a storyboard for this audio.`
+    ? `Create a storyboard for this audio, based on this story: "${storyInput}"`
     : "Create a coherent story and storyboard based on the mood and rhythm of this audio.";
 
   const response = await ai.models.generateContent({
