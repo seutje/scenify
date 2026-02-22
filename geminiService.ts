@@ -22,6 +22,7 @@ export const analyzeAudio = async (
     const totalSeconds = Math.max(0, Math.round(seconds));
     const minutes = Math.floor(totalSeconds / 60);
     const remainingSeconds = totalSeconds % 60;
+    console.log(`${minutes}:${remainingSeconds.toString().padStart(2, "0")}`);
     return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
   };
   
@@ -176,22 +177,25 @@ export const generateSceneImage = async (
     },
   });
 
-  let imageUrl = '';
-  const candidates = response.candidates;
-  if (candidates && candidates.length > 0) {
-    for (const part of candidates[0].content.parts) {
-      if (part.inlineData) {
-        imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-        break;
-      }
+  const candidateParts = (response.candidates || []).flatMap((candidate: any) =>
+    Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []
+  );
+
+  for (const part of candidateParts) {
+    if (part?.inlineData?.data) {
+      return `data:image/png;base64,${part.inlineData.data}`;
     }
   }
 
-  if (!imageUrl) {
-    throw new Error("No image was generated.");
-  }
+  const finishReasons = (response.candidates || [])
+    .map((candidate: any) => candidate?.finishReason)
+    .filter(Boolean)
+    .join(", ");
+  const modelText = typeof response.text === "string" ? response.text.trim() : "";
 
-  return imageUrl;
+  throw new Error(
+    `No image was generated.${finishReasons ? ` Finish reason: ${finishReasons}.` : ""}${modelText ? ` Model output: ${modelText.slice(0, 180)}` : ""}`
+  );
 };
 
 export const generateSceneVideo = async (
