@@ -5,7 +5,7 @@ import Button from './Button';
 
 interface SceneCardProps {
   scene: Scene;
-  hasGlobalReference: boolean;
+  referenceCount: number;
   onRegenerate: () => void;
   onDownload: () => void;
   onRenderVideo: () => void;
@@ -13,12 +13,12 @@ interface SceneCardProps {
   onDownloadAudio: () => void;
   onMotionPromptChange: (val: string) => void;
   onFramePromptChange: (val: string) => void;
-  onUseReferenceChange: (val: boolean) => void;
+  onToggleReferenceNumber: (referenceNumber: number) => void;
 }
 
 const SceneCard: React.FC<SceneCardProps> = ({ 
   scene, 
-  hasGlobalReference,
+  referenceCount,
   onRegenerate, 
   onDownload,
   onRenderVideo,
@@ -26,8 +26,10 @@ const SceneCard: React.FC<SceneCardProps> = ({
   onDownloadAudio,
   onMotionPromptChange,
   onFramePromptChange,
-  onUseReferenceChange
+  onToggleReferenceNumber
 }) => {
+  const selectedReferenceNumbers = scene.referenceImageNumbers || [];
+
   return (
     <div className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden flex flex-col group hover:border-indigo-500/50 transition-colors">
       <div className="relative aspect-video bg-slate-900 flex items-center justify-center overflow-hidden">
@@ -87,16 +89,27 @@ const SceneCard: React.FC<SceneCardProps> = ({
             <label className="block text-[10px] uppercase tracking-wider text-slate-500 font-bold">
               Frame Prompt (Image Generation)
             </label>
-            {hasGlobalReference && (
-              <label className="flex items-center gap-1.5 cursor-pointer group/ref">
-                <input 
-                  type="checkbox"
-                  checked={scene.useReference}
-                  onChange={(e) => onUseReferenceChange(e.target.checked)}
-                  className="w-3 h-3 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 transition-colors"
-                />
-                <span className="text-[10px] text-slate-400 font-medium group-hover/ref:text-slate-300 transition-colors">Use Reference</span>
-              </label>
+            {referenceCount > 0 && (
+              <div className="flex items-center gap-1">
+                {Array.from({ length: referenceCount }, (_, idx) => idx + 1).map((number) => {
+                  const isSelected = selectedReferenceNumbers.includes(number);
+                  return (
+                    <button
+                      key={number}
+                      type="button"
+                      onClick={() => onToggleReferenceNumber(number)}
+                      className={`w-5 h-5 rounded text-[10px] font-semibold border transition-colors ${
+                        isSelected
+                          ? 'bg-indigo-500/20 text-indigo-300 border-indigo-400'
+                          : 'bg-slate-900 text-slate-500 border-slate-700 hover:border-slate-500 hover:text-slate-300'
+                      }`}
+                      title={`Reference ${number}`}
+                    >
+                      {number}
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
           <textarea

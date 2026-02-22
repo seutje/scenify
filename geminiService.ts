@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { Scene } from "./types";
 
 export const analyzeAudio = async (
@@ -9,7 +9,8 @@ export const analyzeAudio = async (
   interval: number = 5,
   duration?: number,
   apiKey?: string,
-  firstClipLength: number = 10
+  firstClipLength: number = 10,
+  referenceImageCount: number = 0
 ): Promise<Scene[]> => {
   const finalApiKey = apiKey || process.env.API_KEY;
   if (!finalApiKey) {
@@ -25,14 +26,21 @@ export const analyzeAudio = async (
   };
   
   const durationInfo = typeof duration === "number"
-    ? `The total duration of this audio is exactly ${formatDurationAsMmSs(duration)} (mm:ss).`
+    ? `The total duration of this audio is exactly ${formatDurationAsMmSs(duration)} (mm:ss), don't stop before you've analyzed the entire length of the audio.`
     : "";
+
+  const safeReferenceImageCount = Math.max(0, Math.min(5, Math.floor(referenceImageCount)));
+  const hasReferenceImages = safeReferenceImageCount > 0;
+  const referenceInstruction = hasReferenceImages
+    ? `You have exactly ${safeReferenceImageCount} reference image(s) available for this request, indexed 1 through ${safeReferenceImageCount}.`
+    : "There are no reference images available for this request.";
 
   const systemInstruction = `
     You are an expert storyboard artist and video director specialized in LTX2 generation.
     Analyze the provided audio. ${durationInfo}
     If a story description is provided, follow it. 
     If not, create a coherent, emotionally resonant story that fits the music's mood and structure.
+    ${referenceInstruction}
     
     TIMING STRUCTURE RULES (STRICT):
     1. The FIRST scene MUST start at timestamp "0:00".
@@ -44,7 +52,10 @@ export const analyzeAudio = async (
     1. ISOLATION: Every 'framePrompt' is generated in isolation. Do NOT use connecting words like "now", "then", "next", or "continues". Each prompt must fully describe the subject and scene context independently.
     2. FIRST FRAME: The 'framePrompt' represents the *first frame* of a video clip. Do NOT describe actions of things *entering* the frame. Describe the scene state at the very beginning of the shot.
     3. VISUAL STYLE: Define a consistent visual style (e.g., "Cinematic lighting, 4k, gloomy atmosphere, oil painting style") and REPEAT this exact style description in EVERY 'framePrompt'.
-    4. IMAGE REFERENCE TOGGLE: For each scene, decide if the person, people or object in the reference image should be visible in the first frame. Set 'useReference' to true if they are visible, and false if they are not.
+    4. IMAGE REFERENCE SELECTION: For each scene, decide which reference images should be visible in the first frame. Output this in 'referenceImageNumbers' as an array of 1-based indices.
+       - If no references should be used, output an empty array [].
+       - If no references are available, ALWAYS output [].
+       - Only use integers within the valid range of available references.
 
     LTX2 MOTION PROMPT GUIDELINES (AUDIO-REACTIVE FOCUS):
     The 'motionPrompt' MUST be tuned for LTX2, instructed to maximize audio-reactivity and lip syncing.
@@ -64,7 +75,7 @@ export const analyzeAudio = async (
     2. A 'description': A narrative description of what happens.
     3. A 'framePrompt': A highly detailed visual prompt for a high-quality cinematic still (16:9), following the rules above.
     4. A 'motionPrompt': A specific LTX2-style prompt describing movement, physics, and sync, adopting the structure of the examples above.
-    5. A 'useReference': Boolean indicating if the reference image should be used to generate the first frame.
+    5. A 'referenceImageNumbers': Array<number> containing the 1-based indices of the reference images to use for the first frame.
   `;
 
   const prompt = storyInput 
@@ -91,9 +102,12 @@ export const analyzeAudio = async (
             description: { type: Type.STRING },
             framePrompt: { type: Type.STRING },
             motionPrompt: { type: Type.STRING },
-            useReference: { type: Type.BOOLEAN },
+            referenceImageNumbers: {
+              type: Type.ARRAY,
+              items: { type: Type.NUMBER }
+            },
           },
-          required: ["timestamp", "description", "framePrompt", "motionPrompt", "useReference"],
+          required: ["timestamp", "description", "framePrompt", "motionPrompt", "referenceImageNumbers"],
         },
       },
     },
@@ -101,7 +115,21 @@ export const analyzeAudio = async (
 
   try {
     const scenes: Scene[] = JSON.parse(response.text || "[]");
-    return scenes;
+    return scenes.map((scene) => {
+      const rawNumbers = Array.isArray(scene.referenceImageNumbers) ? scene.referenceImageNumbers : [];
+      const normalizedNumbers = Array.from(
+        new Set(
+          rawNumbers
+            .map((n) => Math.floor(Number(n)))
+            .filter((n) => Number.isFinite(n) && n >= 1 && n <= safeReferenceImageCount)
+        )
+      ).sort((a, b) => a - b);
+
+      return {
+        ...scene,
+        referenceImageNumbers: normalizedNumbers
+      };
+    });
   } catch (e) {
     console.error("Failed to parse Gemini response", e);
     throw new Error("Invalid response format from AI.");
@@ -110,7 +138,7 @@ export const analyzeAudio = async (
 
 export const generateSceneImage = async (
   prompt: string, 
-  referenceImage?: { data: string, mimeType: string },
+  referenceImages?: Array<{ data: string, mimeType: string }>,
   apiKey?: string
 ): Promise<string> => {
   const finalApiKey = apiKey || process.env.API_KEY;
@@ -120,16 +148,18 @@ export const generateSceneImage = async (
   const ai = new GoogleGenAI({ apiKey: finalApiKey });
   
   const parts: any[] = [];
-  
-  if (referenceImage) {
+
+  if (referenceImages && referenceImages.length > 0) {
+    for (const referenceImage of referenceImages) {
+      parts.push({
+        inlineData: {
+          data: referenceImage.data,
+          mimeType: referenceImage.mimeType
+        }
+      });
+    }
     parts.push({
-      inlineData: {
-        data: referenceImage.data,
-        mimeType: referenceImage.mimeType
-      }
-    });
-    parts.push({
-      text: `Use the character from the provided reference image as the main protagonist in this scene, maintaining their appearance, features, and clothing for consistency. Scene prompt: ${prompt}`
+      text: `Use all provided reference images as visual guidance for the subject(s), object(s), and style in this scene while keeping consistency. Scene prompt: ${prompt}`
     });
   } else {
     parts.push({ text: prompt });

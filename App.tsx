@@ -6,9 +6,18 @@ import { Scene, StoryboardState } from './types';
 import Button from './components/Button';
 import SceneCard from './components/SceneCard';
 
+const MAX_REFERENCE_IMAGES = 5;
+
+type ReferenceImage = {
+  id: string;
+  data: string;
+  mimeType: string;
+  preview: string;
+};
+
 const App: React.FC = () => {
   const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [protagonistImage, setProtagonistImage] = useState<{ data: string, mimeType: string, preview: string } | null>(null);
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [storyInput, setStoryInput] = useState('');
   const [sceneInterval, setSceneInterval] = useState<number>(5);
   const [audioClipLength, setAudioClipLength] = useState<number>(10);
@@ -35,15 +44,57 @@ const App: React.FC = () => {
   };
 
   const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      const data = await fileToBase64(file);
-      setProtagonistImage({
-        data,
-        mimeType: file.type,
-        preview: URL.createObjectURL(file)
-      });
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files).slice(0, Math.max(0, MAX_REFERENCE_IMAGES - referenceImages.length));
+      const newReferenceImages = await Promise.all(
+        files.map(async (file) => ({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          data: await fileToBase64(file),
+          mimeType: file.type,
+          preview: URL.createObjectURL(file)
+        }))
+      );
+
+      if (newReferenceImages.length > 0) {
+        setReferenceImages(prev => [...prev, ...newReferenceImages].slice(0, MAX_REFERENCE_IMAGES));
+      }
+
+      e.target.value = '';
     }
+  };
+
+  const normalizeReferenceNumbers = (referenceNumbers: unknown, maxReferenceNumber: number): number[] => {
+    if (!Array.isArray(referenceNumbers) || maxReferenceNumber < 1) return [];
+
+    return Array.from(
+      new Set(
+        referenceNumbers
+          .map((n) => Math.floor(Number(n)))
+          .filter((n) => Number.isFinite(n) && n >= 1 && n <= maxReferenceNumber)
+      )
+    ).sort((a, b) => a - b);
+  };
+
+  const removeReferenceImage = (index: number) => {
+    const removedReferenceNumber = index + 1;
+    setReferenceImages(prev => {
+      const removedImage = prev[index];
+      if (removedImage) {
+        URL.revokeObjectURL(removedImage.preview);
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+    setState(prev => ({
+      ...prev,
+      scenes: prev.scenes.map(scene => {
+        const current = scene.referenceImageNumbers || [];
+        const adjusted = current
+          .filter((n) => n !== removedReferenceNumber)
+          .map((n) => (n > removedReferenceNumber ? n - 1 : n));
+
+        return { ...scene, referenceImageNumbers: adjusted };
+      })
+    }));
   };
 
   const fileToBase64 = (file: File): Promise<string> => {
@@ -89,15 +140,15 @@ const App: React.FC = () => {
         sceneInterval, 
         duration,
         resolvedApiKey,
-        firstClipLength
+        firstClipLength,
+        referenceImages.length
       );
       setState({
         scenes: scenes.map(s => ({ 
           ...s, 
           isGenerating: false, 
           isVideoGenerating: false,
-          // Only use reference if the model recommends it AND we have a reference image
-          useReference: (s.useReference !== false) && !!protagonistImage 
+          referenceImageNumbers: normalizeReferenceNumbers(s.referenceImageNumbers, referenceImages.length)
         })),
         isAnalyzing: false,
       });
@@ -123,10 +174,18 @@ const App: React.FC = () => {
     setActiveGenerations(prev => prev + 1);
 
     try {
-      const useReference = sceneToGenerate.useReference && protagonistImage;
+      const selectedReferenceNumbers = normalizeReferenceNumbers(
+        sceneToGenerate.referenceImageNumbers,
+        referenceImages.length
+      );
+      const selectedReferenceImages = selectedReferenceNumbers
+        .map((referenceNumber) => referenceImages[referenceNumber - 1])
+        .filter((image): image is ReferenceImage => !!image)
+        .map(({ data, mimeType }) => ({ data, mimeType }));
+
       const imageUrl = await generateSceneImage(
         sceneToGenerate.framePrompt, 
-        useReference ? { data: protagonistImage.data, mimeType: protagonistImage.mimeType } : undefined,
+        selectedReferenceImages.length > 0 ? selectedReferenceImages : undefined,
         resolvedApiKey
       );
       
@@ -546,10 +605,16 @@ const App: React.FC = () => {
     });
   };
 
-  const updateUseReference = (index: number, val: boolean) => {
+  const toggleReferenceNumber = (sceneIndex: number, referenceNumber: number) => {
     setState(prev => {
       const newScenes = [...prev.scenes];
-      newScenes[index] = { ...newScenes[index], useReference: val };
+      const scene = newScenes[sceneIndex];
+      const current = normalizeReferenceNumbers(scene.referenceImageNumbers, referenceImages.length);
+      const next = current.includes(referenceNumber)
+        ? current.filter((n) => n !== referenceNumber)
+        : [...current, referenceNumber].sort((a, b) => a - b);
+
+      newScenes[sceneIndex] = { ...scene, referenceImageNumbers: next };
       return { ...prev, scenes: newScenes };
     });
   };
@@ -703,28 +768,44 @@ const App: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">2. Protagonist Reference (Optional)</label>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">2. Reference Images (Optional, up to 5)</label>
                   <div 
-                    onClick={() => imageInputRef.current?.click()}
-                    className={`h-48 border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-all ${protagonistImage ? 'border-emerald-500 bg-emerald-500/5' : 'border-slate-700 hover:border-slate-500 bg-slate-800/50'}`}
+                    onClick={() => referenceImages.length < MAX_REFERENCE_IMAGES && imageInputRef.current?.click()}
+                    className={`h-48 border-2 border-dashed rounded-xl p-4 transition-all ${referenceImages.length > 0 ? 'border-emerald-500 bg-emerald-500/5' : 'border-slate-700 hover:border-slate-500 bg-slate-800/50'} ${referenceImages.length < MAX_REFERENCE_IMAGES ? 'cursor-pointer' : 'cursor-default'}`}
                   >
-                    <input type="file" accept="image/*" className="hidden" ref={imageInputRef} onChange={handleImageChange} />
-                    {protagonistImage ? (
-                      <div className="relative w-full h-full">
-                        <img src={protagonistImage.preview} className="w-full h-full object-contain rounded-lg" alt="Protagonist" />
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setProtagonistImage(null); }}
-                          className="absolute -top-2 -right-2 bg-rose-600 text-white p-1 rounded-full hover:bg-rose-700"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                        </button>
+                    <input type="file" accept="image/*" multiple className="hidden" ref={imageInputRef} onChange={handleImageChange} />
+                    {referenceImages.length > 0 ? (
+                      <div className="w-full h-full flex flex-col gap-2 overflow-hidden">
+                        <div className="grid grid-cols-3 gap-2">
+                          {referenceImages.map((image, idx) => (
+                            <div key={image.id} className="relative aspect-square">
+                              <img src={image.preview} className="w-full h-full object-cover rounded-lg border border-emerald-500/30" alt={`Reference ${idx + 1}`} />
+                              <div className="absolute top-1 left-1 bg-black/70 text-[10px] px-1.5 py-0.5 rounded text-emerald-300 border border-emerald-500/30">
+                                {idx + 1}
+                              </div>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); removeReferenceImage(idx); }}
+                                className="absolute -top-1 -right-1 bg-rose-600 text-white p-1 rounded-full hover:bg-rose-700"
+                                title={`Remove reference ${idx + 1}`}
+                              >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-auto">
+                          <p className="text-xs text-slate-300 text-center">
+                            {referenceImages.length}/{MAX_REFERENCE_IMAGES} selected
+                            {referenceImages.length < MAX_REFERENCE_IMAGES ? ' - click to add more' : ' - max reached'}
+                          </p>
+                        </div>
                       </div>
                     ) : (
                       <>
                         <svg className="w-10 h-10 text-slate-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>
-                        <p className="text-xs text-slate-400 text-center">Reference for character consistency</p>
+                        <p className="text-xs text-slate-400 text-center">Click to upload up to 5 reference images</p>
                       </>
                     )}
                   </div>
@@ -806,9 +887,9 @@ const App: React.FC = () => {
                 <span className="text-sm font-normal text-slate-500 bg-slate-800 px-2 py-0.5 rounded-full">
                   {state.scenes.length} Scenes
                 </span>
-                {protagonistImage && (
+                {referenceImages.length > 0 && (
                   <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full uppercase tracking-tighter">
-                    Character Consistency Active
+                    {referenceImages.length} Reference{referenceImages.length === 1 ? '' : 's'} Active
                   </span>
                 )}
               </h2>
@@ -843,7 +924,7 @@ const App: React.FC = () => {
                 <SceneCard
                   key={idx}
                   scene={scene}
-                  hasGlobalReference={!!protagonistImage}
+                  referenceCount={referenceImages.length}
                   onRegenerate={() => handleRegenerateScene(idx)}
                   onDownload={() => scene.imageUrl && downloadFrame(scene.imageUrl, scene.timestamp)}
                   onRenderVideo={() => handleRenderVideo(idx)}
@@ -851,7 +932,7 @@ const App: React.FC = () => {
                   onDownloadAudio={() => handleDownloadAudio(scene.timestamp)}
                   onMotionPromptChange={(val) => updateMotionPrompt(idx, val)}
                   onFramePromptChange={(val) => updateFramePrompt(idx, val)}
-                  onUseReferenceChange={(val) => updateUseReference(idx, val)}
+                  onToggleReferenceNumber={(referenceNumber) => toggleReferenceNumber(idx, referenceNumber)}
                 />
               ))}
             </div>

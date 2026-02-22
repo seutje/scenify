@@ -8,7 +8,7 @@ export interface Scene {
   videoUrl?: string;
   isGenerating?: boolean;
   isVideoGenerating?: boolean;
-  useReference?: boolean;
+  referenceImageNumbers?: number[];
 }
 
 export interface StoryboardState {
