@@ -141,7 +141,7 @@ const App: React.FC = () => {
         duration,
         resolvedApiKey,
         firstClipLength,
-        referenceImages.length
+        referenceImages.map(({ data, mimeType }) => ({ data, mimeType }))
       );
       setState({
         scenes: scenes.map(s => ({ 

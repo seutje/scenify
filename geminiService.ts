@@ -2,6 +2,11 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Scene } from "./types";
 
+type ReferenceImageInput = {
+  data: string;
+  mimeType: string;
+};
+
 export const analyzeAudio = async (
   base64Audio: string,
   mimeType: string,
@@ -10,7 +15,7 @@ export const analyzeAudio = async (
   duration?: number,
   apiKey?: string,
   firstClipLength: number = 10,
-  referenceImageCount: number = 0
+  referenceImages: ReferenceImageInput[] = []
 ): Promise<Scene[]> => {
   const finalApiKey = apiKey || process.env.API_KEY;
   if (!finalApiKey) {
@@ -22,7 +27,6 @@ export const analyzeAudio = async (
     const totalSeconds = Math.max(0, Math.round(seconds));
     const minutes = Math.floor(totalSeconds / 60);
     const remainingSeconds = totalSeconds % 60;
-    console.log(`${minutes}:${remainingSeconds.toString().padStart(2, "0")}`);
     return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
   };
   
@@ -30,10 +34,13 @@ export const analyzeAudio = async (
     ? `The total duration of this audio is exactly ${formatDurationAsMmSs(duration)} (mm:ss), don't stop before you've analyzed the entire length of the audio.`
     : "";
 
-  const safeReferenceImageCount = Math.max(0, Math.min(5, Math.floor(referenceImageCount)));
+  const safeReferenceImages = referenceImages
+    .filter((image) => !!image?.data && !!image?.mimeType)
+    .slice(0, 5);
+  const safeReferenceImageCount = safeReferenceImages.length;
   const hasReferenceImages = safeReferenceImageCount > 0;
   const referenceInstruction = hasReferenceImages
-    ? `You have exactly ${safeReferenceImageCount} reference image(s) available for this request, indexed 1 through ${safeReferenceImageCount}.`
+    ? `You have exactly ${safeReferenceImageCount} reference image(s) available for this request, indexed 1 through ${safeReferenceImageCount}, in the same order as provided in the input.`
     : "There are no reference images available for this request.";
 
   const systemInstruction = `
@@ -83,13 +90,23 @@ export const analyzeAudio = async (
     ? `Create a storyboard for this audio, based on this story: "${storyInput}"`
     : "Create a coherent story and storyboard based on the mood and rhythm of this audio.";
 
+  const analysisParts: any[] = [];
+  safeReferenceImages.forEach((image, idx) => {
+    analysisParts.push({ text: `Reference image ${idx + 1}` });
+    analysisParts.push({
+      inlineData: {
+        data: image.data,
+        mimeType: image.mimeType
+      }
+    });
+  });
+  analysisParts.push({ inlineData: { data: base64Audio, mimeType } });
+  analysisParts.push({ text: prompt });
+
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: {
-      parts: [
-        { inlineData: { data: base64Audio, mimeType } },
-        { text: prompt }
-      ]
+      parts: analysisParts
     },
     config: {
       systemInstruction,
