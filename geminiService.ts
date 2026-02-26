@@ -57,7 +57,7 @@ export const analyzeAudio = async (
     4. Provide scene information across the ENTIRE audio duration based on this cadence.
     
     CRITICAL PROMPT GENERATION RULES:
-    1. ISOLATION: Every 'framePrompt' is generated in isolation. Do NOT use connecting words like "now", "then", "next", or "continues". Each prompt must fully describe the subject and scene context independently.
+    1. ISOLATION: Every 'framePrompt' is generated in isolation. Do NOT use connecting words like "now", "then", "next", or "continues". Each prompt must fully describe the subject and scene context independently. Always describe characters in full detail, don't reference to them as "the protagonist" or "the dancers".
     2. FIRST FRAME: The 'framePrompt' represents the *first frame* of a video clip. Do NOT describe actions of things *entering* the frame. Describe the scene state at the very beginning of the shot.
     3. VISUAL STYLE: Define a consistent visual style (e.g., "Cinematic lighting, 4k, gloomy atmosphere, oil painting style") and REPEAT this exact style description in EVERY 'framePrompt'.
     4. IMAGE REFERENCE SELECTION: For each scene, decide which reference images should be visible in the first frame. Output this in 'referenceImageNumbers' as an array of 1-based indices.
