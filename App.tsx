@@ -459,8 +459,9 @@ const App: React.FC = () => {
                 }
             }
 
-            // Calculate video_length in frames based on clip length (default 24fps)
-            const videoFrames = Math.floor(duration * 24);
+            // Include the end frame so 10s at 24fps exports as 241 frames.
+            const fps = 24;
+            const videoFrames = Math.floor(duration * fps) + 1;
 
             queueData.push({
                 "id": i + 1,
@@ -474,7 +475,7 @@ const App: React.FC = () => {
                     "duration_seconds": 0,
                     "batch_size": 1,
                     "seed": -1,
-                    "force_fps": "24",
+                    "force_fps": String(fps),
                     "num_inference_steps": 8,
                     "guidance_scale": 4,
                     "guidance2_scale": 5,
