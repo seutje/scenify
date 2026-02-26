@@ -772,7 +772,7 @@ const App: React.FC = () => {
                   <label className="block text-sm font-medium text-slate-300 mb-2">2. Reference Images (Optional, up to 5)</label>
                   <div 
                     onClick={() => referenceImages.length < MAX_REFERENCE_IMAGES && imageInputRef.current?.click()}
-                    className={`h-48 border-2 border-dashed rounded-xl p-4 transition-all ${referenceImages.length > 0 ? 'border-emerald-500 bg-emerald-500/5' : 'border-slate-700 hover:border-slate-500 bg-slate-800/50'} ${referenceImages.length < MAX_REFERENCE_IMAGES ? 'cursor-pointer' : 'cursor-default'}`}
+                    className={`h-48 border-2 border-dashed rounded-xl p-4 transition-all ${referenceImages.length > 0 ? 'border-emerald-500 bg-emerald-500/5' : 'border-slate-700 hover:border-slate-500 bg-slate-800/50 flex flex-col items-center justify-center'} ${referenceImages.length < MAX_REFERENCE_IMAGES ? 'cursor-pointer' : 'cursor-default'}`}
                   >
                     <input type="file" accept="image/*" multiple className="hidden" ref={imageInputRef} onChange={handleImageChange} />
                     {referenceImages.length > 0 ? (
