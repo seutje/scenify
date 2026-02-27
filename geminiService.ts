@@ -64,6 +64,7 @@ export const analyzeAudio = async (
        - If no references should be used, output an empty array [].
        - If no references are available, ALWAYS output [].
        - Only use integers within the valid range of available references.
+    5. MULTIPLE IMAGE REFERENCES: When using multiple image references, the framePrompt should make it clear which character is from which reference image by going (image 1) or (image 2) after the character description.
 
     LTX2 MOTION PROMPT GUIDELINES (AUDIO-REACTIVE FOCUS):
     The 'motionPrompt' MUST be tuned for LTX2, instructed to maximize audio-reactivity and lip syncing.
