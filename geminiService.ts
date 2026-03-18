@@ -158,6 +158,7 @@ export const analyzeAudio = async (
 export const generateSceneImage = async (
   prompt: string, 
   referenceImages?: Array<{ data: string, mimeType: string }>,
+  model: string = 'gemini-3-flash-preview',
   apiKey?: string
 ): Promise<string> => {
   const finalApiKey = apiKey || process.env.API_KEY;
@@ -185,7 +186,7 @@ export const generateSceneImage = async (
   }
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-image-preview',
+    model,
     contents: { parts },
     config: {
       imageConfig: {

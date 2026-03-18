@@ -23,6 +23,7 @@ const App: React.FC = () => {
   const [audioClipLength, setAudioClipLength] = useState<number>(10);
   const [firstClipLength, setFirstClipLength] = useState<number>(10);
   const [videoModel, setVideoModel] = useState<string>('veo-3.1-fast-generate-preview');
+  const [imageModel, setImageModel] = useState<string>('gemini-3-flash-preview');
   const [state, setState] = useState<StoryboardState>({
     scenes: [],
     isAnalyzing: false,
@@ -186,6 +187,7 @@ const App: React.FC = () => {
       const imageUrl = await generateSceneImage(
         sceneToGenerate.framePrompt, 
         selectedReferenceImages.length > 0 ? selectedReferenceImages : undefined,
+        imageModel,
         resolvedApiKey
       );
       
@@ -564,9 +566,9 @@ const App: React.FC = () => {
                     "output_filename": outputFilename,
                     "mode": "",
                     "activated_loras": [],
-                    "model_type": "ltx2_distilled",
+                    "model_type": "ltx2_22B_distilled",
                     "settings_version": 2.45,
-                    "base_model_type": "ltx2_19B"
+                    "base_model_type": "ltx2_22B"
                 }
             });
         }
@@ -895,6 +897,19 @@ const App: React.FC = () => {
                 )}
               </h2>
               <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                   <span className="text-xs text-slate-500 font-medium hidden md:inline">Image Model:</span>
+                   <select
+                      value={imageModel}
+                      onChange={(e) => setImageModel(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2 outline-none"
+                   >
+                      <option value="gemini-3-flash-preview">Nano Banana</option>
+                      <option value="gemini-3-pro-image-preview">Nano Banana Pro</option>
+                      <option value="gemini-3.1-flash-image-preview">Nano Banana 2</option>
+                   </select>
+                </div>
+
                 <div className="flex items-center gap-2">
                    <span className="text-xs text-slate-500 font-medium hidden md:inline">Video Model:</span>
                    <select
