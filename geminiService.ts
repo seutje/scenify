@@ -26,7 +26,7 @@ const GEMINI_STORYBOARD_MODEL = 'gemini-3-flash-preview';
 const DEFAULT_OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 export const DEFAULT_OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3.5:9b';
 export const DEFAULT_STORYBOARD_PROVIDER: StoryboardProvider =
-  process.env.STORYBOARD_PROVIDER === 'ollama' ? 'ollama' : 'gemini';
+  process.env.STORYBOARD_PROVIDER === 'gemini' ? 'gemini' : 'ollama';
 
 const normalizeReferenceNumbers = (referenceNumbers: unknown, maxReferenceNumber: number): number[] => {
   if (!Array.isArray(referenceNumbers) || maxReferenceNumber < 1) return [];

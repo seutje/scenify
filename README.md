@@ -6,7 +6,7 @@
 1. Install dependencies:
    `npm install`
 2. Default local-model settings live in [.env](.env):
-   `STORYBOARD_PROVIDER=gemini`
+   `STORYBOARD_PROVIDER=ollama`
    `OLLAMA_BASE_URL=http://127.0.0.1:11434`
    `OLLAMA_MODEL=qwen3.5:9b`
 3. Set the `GEMINI_API_KEY` in `.env.local` if you want Gemini storyboarding or Gemini image/video generation
