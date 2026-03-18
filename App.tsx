@@ -1,8 +1,15 @@
 
 import React, { useState, useRef } from 'react';
 import JSZip from 'jszip';
-import { analyzeAudio, generateSceneImage, generateSceneVideo } from './geminiService';
-import { Scene, StoryboardState } from './types';
+import {
+  analyzeAudio,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_STORYBOARD_PROVIDER,
+  generateSceneImage,
+  generateSceneVideo
+} from './geminiService';
+import { summarizeAudioForStoryboard } from './audioAnalysis';
+import { Scene, StoryboardProvider, StoryboardState } from './types';
 import Button from './components/Button';
 import SceneCard from './components/SceneCard';
 
@@ -16,6 +23,10 @@ type ReferenceImage = {
 };
 
 const App: React.FC = () => {
+  const envApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  const envOllamaUrl = process.env.OLLAMA_BASE_URL || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+  const envOllamaModel = process.env.OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL;
+
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [storyInput, setStoryInput] = useState('');
@@ -30,13 +41,18 @@ const App: React.FC = () => {
   });
   const [activeGenerations, setActiveGenerations] = useState(0);
   const [customApiKey, setCustomApiKey] = useState('');
+  const [storyboardProvider, setStoryboardProvider] = useState<StoryboardProvider>(DEFAULT_STORYBOARD_PROVIDER);
+  const [customOllamaUrl, setCustomOllamaUrl] = useState('');
+  const [customOllamaModel, setCustomOllamaModel] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDownloadingQueue, setIsDownloadingQueue] = useState(false);
 
   const audioInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const envApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
   const resolvedApiKey = customApiKey.trim() || envApiKey;
+  const resolvedOllamaUrl = customOllamaUrl.trim() || envOllamaUrl;
+  const resolvedOllamaModel = customOllamaModel.trim() || envOllamaModel;
+  const isOllamaStoryboard = storyboardProvider === 'ollama';
 
   const handleAudioChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -110,20 +126,18 @@ const App: React.FC = () => {
     });
   };
 
-  const getAudioDuration = (file: File): Promise<number> => {
-    return new Promise((resolve) => {
-      const audio = new Audio();
-      const url = URL.createObjectURL(file);
-      audio.src = url;
-      audio.onloadedmetadata = () => {
-        URL.revokeObjectURL(url);
-        resolve(audio.duration);
-      };
-      audio.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve(0); // Fallback to 0 if duration can't be read
-      };
-    });
+  const decodeAudioFile = async (file: File): Promise<AudioBuffer> => {
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    const audioContext = new AudioContextCtor();
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      return await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    } finally {
+      if (typeof audioContext.close === 'function') {
+        await audioContext.close().catch(() => undefined);
+      }
+    }
   };
 
   const handleCreateStoryboard = async () => {
@@ -133,16 +147,26 @@ const App: React.FC = () => {
 
     try {
       const base64Audio = await fileToBase64(audioFile);
-      const duration = await getAudioDuration(audioFile);
+      const audioBuffer = await decodeAudioFile(audioFile);
+      const duration = audioBuffer.duration;
+      const audioSummary = isOllamaStoryboard
+        ? summarizeAudioForStoryboard(audioBuffer, sceneInterval, firstClipLength)
+        : undefined;
       const scenes = await analyzeAudio(
-        base64Audio, 
-        audioFile.type, 
-        storyInput, 
-        sceneInterval, 
-        duration,
-        resolvedApiKey,
-        firstClipLength,
-        referenceImages.map(({ data, mimeType }) => ({ data, mimeType }))
+        base64Audio,
+        audioFile.type,
+        {
+          storyInput,
+          interval: sceneInterval,
+          duration,
+          apiKey: resolvedApiKey,
+          firstClipLength,
+          referenceImages: referenceImages.map(({ data, mimeType }) => ({ data, mimeType })),
+          provider: storyboardProvider,
+          ollamaUrl: resolvedOllamaUrl,
+          ollamaModel: resolvedOllamaModel,
+          audioSummary
+        }
       );
       setState({
         scenes: scenes.map(s => ({ 
@@ -641,6 +665,52 @@ const App: React.FC = () => {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Storyboard Provider
+                </label>
+                <select
+                  value={storyboardProvider}
+                  onChange={(e) => setStoryboardProvider(e.target.value as StoryboardProvider)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                >
+                  <option value="gemini">Gemini</option>
+                  <option value="ollama">Local Ollama</option>
+                </select>
+                <p className="text-xs text-slate-500 mt-2">
+                  Set `STORYBOARD_PROVIDER=ollama` in `.env.local` to make Ollama the default on load.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Ollama URL Override
+                </label>
+                <input 
+                  type="text"
+                  value={customOllamaUrl}
+                  onChange={e => setCustomOllamaUrl(e.target.value)}
+                  placeholder={envOllamaUrl}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                />
+                <p className="text-xs text-slate-500 mt-2">
+                  Leave blank to use `OLLAMA_BASE_URL` from the env file. Current default: {envOllamaUrl}
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Ollama Model Override
+                </label>
+                <input 
+                  type="text"
+                  value={customOllamaModel}
+                  onChange={e => setCustomOllamaModel(e.target.value)}
+                  placeholder={envOllamaModel}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                />
+                <p className="text-xs text-slate-500 mt-2">
+                  Leave blank to use `OLLAMA_MODEL`. The detected installed model name is `qwen3.5:9b`.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
                   API Key Override
                 </label>
                 <input 
@@ -651,9 +721,14 @@ const App: React.FC = () => {
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                 />
                 <p className="text-xs text-slate-500 mt-2">
-                  Leave blank to use the default environment key.
+                  Leave blank to use the default environment key. Gemini is still required for frame and video generation.
                 </p>
               </div>
+              {isOllamaStoryboard && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                  Your installed `qwen3.5:9b` model exposes vision, not raw audio, through Ollama. Storyboard generation uses in-browser audio analysis as context for Ollama scene planning.
+                </div>
+              )}
             </div>
             <div className="flex justify-end mt-6">
               <Button onClick={() => setIsSettingsOpen(false)} className="px-6">Done</Button>
@@ -679,7 +754,7 @@ const App: React.FC = () => {
               </svg>
             </button>
           </div>
-          <p className="text-slate-400">Transform your audio into visual narratives using Gemini 3.</p>
+          <p className="text-slate-400">Transform your audio into visual narratives with Gemini media generation and optional local Ollama storyboarding.</p>
         </div>
         
         {state.scenes.length > 0 && (
@@ -821,7 +896,7 @@ const App: React.FC = () => {
                   <textarea
                     value={storyInput}
                     onChange={(e) => setStoryInput(e.target.value)}
-                    placeholder="Describe your story idea... If left blank, Gemini will craft one."
+                    placeholder="Describe your story idea... If left blank, the active storyboard model will craft one."
                     className="w-full h-24 bg-slate-800 border border-slate-700 rounded-xl p-4 text-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none text-sm"
                   />
                 </div>
@@ -874,6 +949,12 @@ const App: React.FC = () => {
               >
                 Create Storyboard
               </Button>
+
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-4 py-3 text-xs text-slate-400">
+                Storyboard provider: <span className="text-slate-200">{isOllamaStoryboard ? `Ollama (${resolvedOllamaModel})` : 'Gemini'}</span>
+                {' '}at <span className="text-slate-200">{isOllamaStoryboard ? resolvedOllamaUrl : 'Gemini API'}</span>.
+                {isOllamaStoryboard && !resolvedApiKey && ' Add a Gemini API key in settings if you also want image or video generation.'}
+              </div>
 
               {state.error && (
                 <div className="p-4 bg-rose-500/10 border border-rose-500/50 rounded-lg text-rose-500 text-sm">
@@ -957,7 +1038,7 @@ const App: React.FC = () => {
       </main>
 
       <footer className="max-w-6xl mx-auto mt-20 pt-8 border-t border-slate-800 text-center text-slate-600 text-sm">
-        <p>Built with Gemini 3 Flash, Nano Banana Pro & Veo 3.1</p>
+        <p>Built with Gemini 3 Flash, optional local Ollama storyboarding, Nano Banana Pro and Veo 3.1</p>
         <div className="flex justify-center gap-4 mt-2">
           <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="hover:text-slate-400">
             Billing Documentation

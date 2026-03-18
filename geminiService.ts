@@ -1,27 +1,117 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
-import { Scene } from "./types";
+import { buildStoryboardTimeline } from "./audioAnalysis";
+import { AudioAnalysisSummary, Scene, StoryboardProvider } from "./types";
 
 type ReferenceImageInput = {
   data: string;
   mimeType: string;
 };
 
-export const analyzeAudio = async (
+type AnalyzeAudioOptions = {
+  storyInput?: string;
+  interval?: number;
+  duration?: number;
+  apiKey?: string;
+  firstClipLength?: number;
+  referenceImages?: ReferenceImageInput[];
+  provider?: StoryboardProvider;
+  ollamaUrl?: string;
+  ollamaModel?: string;
+  audioSummary?: AudioAnalysisSummary;
+};
+
+type TimelineEntry = ReturnType<typeof buildStoryboardTimeline>[number];
+
+const GEMINI_STORYBOARD_MODEL = 'gemini-3-flash-preview';
+const DEFAULT_OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+export const DEFAULT_OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3.5:9b';
+export const DEFAULT_STORYBOARD_PROVIDER: StoryboardProvider =
+  process.env.STORYBOARD_PROVIDER === 'ollama' ? 'ollama' : 'gemini';
+
+const normalizeReferenceNumbers = (referenceNumbers: unknown, maxReferenceNumber: number): number[] => {
+  if (!Array.isArray(referenceNumbers) || maxReferenceNumber < 1) return [];
+
+  return Array.from(
+    new Set(
+      referenceNumbers
+        .map((n) => Math.floor(Number(n)))
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= maxReferenceNumber)
+    )
+  ).sort((a, b) => a - b);
+};
+
+const resolveGeminiApiKey = (apiKey?: string): string => {
+  const finalApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.API_KEY;
+  if (!finalApiKey) {
+    throw new Error("Gemini API Key is missing. Please provide it in settings or ensure the environment is configured.");
+  }
+  return finalApiKey;
+};
+
+const normalizeOllamaBaseUrl = (baseUrl?: string): string => {
+  const resolved = (baseUrl || DEFAULT_OLLAMA_BASE_URL).trim();
+  return resolved.replace(/\/+$/, '');
+};
+
+const extractJsonArray = (rawText: string): unknown[] => {
+  const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // Fall back to extracting the first JSON array block below.
+  }
+
+  const firstBracket = cleaned.indexOf('[');
+  const lastBracket = cleaned.lastIndexOf(']');
+  if (firstBracket >= 0 && lastBracket > firstBracket) {
+    const candidate = cleaned.slice(firstBracket, lastBracket + 1);
+    const parsed = JSON.parse(candidate);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new Error("Invalid JSON response format from AI.");
+};
+
+const normalizeScenes = (
+  scenes: unknown[],
+  maxReferenceNumber: number,
+  timeline: TimelineEntry[]
+): Scene[] => {
+  return timeline.map((timelineEntry, index) => {
+    const scene = (scenes[index] as Partial<Scene> | undefined) || {};
+    const fallbackDescription = `Visual beat at ${timelineEntry.timestamp}, shaped by the music in this segment.`;
+    const fallbackFramePrompt = `Cinematic still frame, 16:9 composition, a visually striking interpretation of the music at ${timelineEntry.timestamp}, rich detail, dramatic lighting, consistent filmic grade.`;
+    const fallbackMotionPrompt = `Cinematic motion synchronized to the music at ${timelineEntry.timestamp}. Motion: camera drift, rhythmic subject movement, and environment details reacting precisely to the beat. Sync: strong lip-sync or audio-reactive timing where applicable. Atmosphere: preserve the same cinematic style and emotional tone as the frame prompt.`;
+
+    return {
+      timestamp: typeof scene.timestamp === 'string' && scene.timestamp.trim() ? scene.timestamp.trim() : timelineEntry.timestamp,
+      description: typeof scene.description === 'string' && scene.description.trim() ? scene.description.trim() : fallbackDescription,
+      framePrompt: typeof scene.framePrompt === 'string' && scene.framePrompt.trim() ? scene.framePrompt.trim() : fallbackFramePrompt,
+      motionPrompt: typeof scene.motionPrompt === 'string' && scene.motionPrompt.trim() ? scene.motionPrompt.trim() : fallbackMotionPrompt,
+      referenceImageNumbers: normalizeReferenceNumbers(scene.referenceImageNumbers, maxReferenceNumber)
+    };
+  });
+};
+
+const analyzeAudioWithGemini = async (
   base64Audio: string,
   mimeType: string,
-  storyInput?: string,
-  interval: number = 5,
-  duration?: number,
-  apiKey?: string,
-  firstClipLength: number = 10,
-  referenceImages: ReferenceImageInput[] = []
+  {
+    storyInput,
+    interval = 5,
+    duration,
+    apiKey,
+    firstClipLength = 10,
+    referenceImages = []
+  }: AnalyzeAudioOptions
 ): Promise<Scene[]> => {
-  const finalApiKey = apiKey || process.env.API_KEY;
-  if (!finalApiKey) {
-    throw new Error("API Key is missing. Please provide it in settings or ensure the environment is configured.");
-  }
-  const ai = new GoogleGenAI({ apiKey: finalApiKey });
+  const ai = new GoogleGenAI({ apiKey: resolveGeminiApiKey(apiKey) });
 
   const formatDurationAsMmSs = (seconds: number): string => {
     const totalSeconds = Math.max(0, Math.round(seconds));
@@ -105,7 +195,7 @@ export const analyzeAudio = async (
   analysisParts.push({ text: prompt });
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: GEMINI_STORYBOARD_MODEL,
     contents: {
       parts: analysisParts
     },
@@ -133,26 +223,133 @@ export const analyzeAudio = async (
   });
 
   try {
-    const scenes: Scene[] = JSON.parse(response.text || "[]");
-    return scenes.map((scene) => {
-      const rawNumbers = Array.isArray(scene.referenceImageNumbers) ? scene.referenceImageNumbers : [];
-      const normalizedNumbers = Array.from(
-        new Set(
-          rawNumbers
-            .map((n) => Math.floor(Number(n)))
-            .filter((n) => Number.isFinite(n) && n >= 1 && n <= safeReferenceImageCount)
-        )
-      ).sort((a, b) => a - b);
+    const scenes = extractJsonArray(response.text || "");
+    const timeline = buildStoryboardTimeline(duration || 0, firstClipLength, interval);
+    const normalized = normalizeScenes(
+      scenes,
+      safeReferenceImageCount,
+      timeline.length > 0 ? timeline : [{ timestamp: "0:00", startSeconds: 0, endSeconds: duration || 0 }]
+    );
 
-      return {
-        ...scene,
-        referenceImageNumbers: normalizedNumbers
-      };
-    });
+    if (normalized.length > 0) {
+      return normalized;
+    }
   } catch (e) {
     console.error("Failed to parse Gemini response", e);
-    throw new Error("Invalid response format from AI.");
   }
+
+  throw new Error("Invalid response format from AI.");
+};
+
+const buildOllamaPrompt = (
+  audioSummary: AudioAnalysisSummary,
+  timeline: TimelineEntry[],
+  storyInput: string | undefined,
+  referenceCount: number
+): string => {
+  const timelineSummary = timeline.map((entry, index) => {
+    const segment = audioSummary.segments[index];
+    return {
+      timestamp: entry.timestamp,
+      startSeconds: entry.startSeconds,
+      endSeconds: entry.endSeconds,
+      energy: segment?.energy || 'medium',
+      trend: segment?.trend || 'steady',
+      averageIntensity: segment?.averageIntensity ?? 0,
+      peakIntensity: segment?.peakIntensity ?? 0
+    };
+  });
+
+  return [
+    `Create one storyboard scene for each timestamp in this exact schedule and return a raw JSON array only.`,
+    `If a story concept is provided, follow it. If not, invent a coherent story that matches the musical energy and pacing.`,
+    `Uploaded reference images are not sent to the local model. ${referenceCount > 0 ? `There are ${referenceCount} uploaded reference image slots available, but unless the story explicitly requires a slot number, leave referenceImageNumbers as [].` : `There are no reference images available, so always output [].`}`,
+    `Use a single consistent visual style phrase and repeat that exact style phrase in every framePrompt.`,
+    `Every framePrompt must stand alone and describe the first frame of the shot, never a transition from a previous shot.`,
+    `Every motionPrompt must be optimized for LTX2 and emphasize beat sync, audio reactivity, physics, and lip sync when appropriate.`,
+    `Required JSON shape for every item: {"timestamp":"0:00","description":"...","framePrompt":"...","motionPrompt":"...","referenceImageNumbers":[]}`,
+    `Global audio summary: ${JSON.stringify({
+      durationSeconds: audioSummary.durationSeconds,
+      overallEnergy: audioSummary.overallEnergy,
+      dynamicRange: audioSummary.dynamicRange,
+      estimatedBpm: audioSummary.estimatedBpm,
+      notableMoments: audioSummary.notableMoments
+    })}`,
+    `Scene timing and musical cues: ${JSON.stringify(timelineSummary)}`,
+    storyInput?.trim()
+      ? `Story concept: ${storyInput.trim()}`
+      : `No story concept was supplied. Invent one that tracks the musical arc.`,
+    `Return only JSON. No markdown, no prose, no explanation.`
+  ].join('\n\n');
+};
+
+const analyzeAudioWithOllama = async ({
+  storyInput,
+  interval = 5,
+  duration,
+  firstClipLength = 10,
+  referenceImages = [],
+  ollamaUrl,
+  ollamaModel,
+  audioSummary
+}: AnalyzeAudioOptions): Promise<Scene[]> => {
+  if (!audioSummary) {
+    throw new Error("Local Ollama storyboard generation requires browser audio analysis data.");
+  }
+
+  const safeDuration = duration || audioSummary.durationSeconds;
+  const timeline = buildStoryboardTimeline(safeDuration, firstClipLength, interval);
+  const prompt = buildOllamaPrompt(audioSummary, timeline, storyInput, referenceImages.length);
+  const baseUrl = normalizeOllamaBaseUrl(ollamaUrl);
+  const model = (ollamaModel || DEFAULT_OLLAMA_MODEL).trim() || DEFAULT_OLLAMA_MODEL;
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: {
+          temperature: 0.4
+        }
+      })
+    });
+  } catch (error) {
+    throw new Error(`Could not reach Ollama at ${baseUrl}. Check that the server is running and accessible from the browser.`);
+  }
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const errorMessage = typeof result?.error === 'string' ? result.error : `${response.status} ${response.statusText}`;
+    throw new Error(`Ollama request failed: ${errorMessage}`);
+  }
+  if (typeof result?.error === 'string' && result.error.trim()) {
+    throw new Error(`Ollama error: ${result.error}`);
+  }
+
+  const rawText = typeof result?.response === 'string' ? result.response : '';
+  const scenes = extractJsonArray(rawText);
+  return normalizeScenes(scenes, referenceImages.length, timeline);
+};
+
+export const analyzeAudio = async (
+  base64Audio: string,
+  mimeType: string,
+  options: AnalyzeAudioOptions = {}
+): Promise<Scene[]> => {
+  const provider: StoryboardProvider = options.provider === 'ollama' || options.provider === 'gemini'
+    ? options.provider
+    : DEFAULT_STORYBOARD_PROVIDER;
+  if (provider === 'ollama') {
+    return analyzeAudioWithOllama(options);
+  }
+
+  return analyzeAudioWithGemini(base64Audio, mimeType, options);
 };
 
 export const generateSceneImage = async (
@@ -161,11 +358,7 @@ export const generateSceneImage = async (
   model: string = 'gemini-3-flash-preview',
   apiKey?: string
 ): Promise<string> => {
-  const finalApiKey = apiKey || process.env.API_KEY;
-  if (!finalApiKey) {
-    throw new Error("API Key is missing.");
-  }
-  const ai = new GoogleGenAI({ apiKey: finalApiKey });
+  const ai = new GoogleGenAI({ apiKey: resolveGeminiApiKey(apiKey) });
   
   const parts: any[] = [];
 
@@ -223,18 +416,13 @@ export const generateSceneVideo = async (
   model: string = 'veo-3.1-fast-generate-preview',
   apiKey?: string
 ): Promise<string> => {
-  const finalApiKey = apiKey || process.env.API_KEY;
-  if (!finalApiKey) {
-    throw new Error("API Key is missing.");
-  }
-  const ai = new GoogleGenAI({ apiKey: finalApiKey });
+  const ai = new GoogleGenAI({ apiKey: resolveGeminiApiKey(apiKey) });
   
   const imagePart = imageUri ? {
     imageBytes: imageUri.split(',')[1],
     mimeType: imageUri.split(';')[0].split(':')[1]
   } : undefined;
 
-  // Prompt is mandatory and must be substantial for video generation
   const finalPrompt = prompt?.trim() || "Cinematic cinematic motion";
 
   const config: any = {
@@ -265,7 +453,7 @@ export const generateSceneVideo = async (
     throw new Error("Video generation failed or link not found.");
   }
 
-  const response = await fetch(`${downloadLink}&key=${finalApiKey}`);
+  const response = await fetch(`${downloadLink}&key=${resolveGeminiApiKey(apiKey)}`);
   if (!response.ok) {
     throw new Error(`Failed to download generated video: ${response.status} ${response.statusText}`);
   }
