@@ -17,7 +17,7 @@ export interface StoryboardState {
   error?: string;
 }
 
-export type StoryboardProvider = 'gemini' | 'ollama';
+export type StoryboardProvider = 'ollama' | 'gemini';
 
 export type AudioEnergyLevel = 'low' | 'medium' | 'high';
 export type AudioTrend = 'falling' | 'steady' | 'rising';
